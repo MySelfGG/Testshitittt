@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>HTML Runner with Gist Sync</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/monokai.min.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/htmlmixed/htmlmixed.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/javascript/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/css/css.min.js"></script>
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: white;
+      font-family: monospace;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    #controls {
+      padding: 10px;
+      background: #222;
+    }
+    #controls input,
+    #controls button,
+    #controls select {
+      margin-right: 10px;
+      padding: 6px;
+      font-size: 14px;
+    }
+    #editor {
+      flex: 1;
+      display: flex;
+    }
+    #codeEditor {
+      width: 100%;
+      height: 100%;
+    }
+    iframe {
+      width: 853px;
+      height: 480px;
+      border: 2px solid #ccc;
+      background: white;
+      position: fixed;
+      bottom: 10px;
+      right: 10px;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <input id="url" type="text" placeholder="Paste raw GitHub URL..." style="width: 30%;">
+    <input id="gistToken" type="password" placeholder="GitHub Token" style="width: 20%;">
+    <button onclick="loadHTML()">Load URL</button>
+    <button onclick="runHTML()">▶ Run</button>
+    <button onclick="focusCanvas()">🎯 Focus</button>
+    <button onclick="saveToGist()">💾 Save to Gist</button>
+    <button onclick="loadFromGist()">📂 Load from Gist</button>
+    <input id="gistId" placeholder="Gist ID" style="width: 15%;">
+    <span style="margin-left: 10px;">💡 Ctrl+Shift+R to focus canvas</span>
+  </div>
+  <div id="editor">
+    <div id="codeEditor"></div>
+  </div>
+  <iframe id="runnerFrame" sandbox="allow-scripts allow-same-origin"></iframe>
+
+  <script>
+    let editor;
+    window.onload = () => {
+      editor = CodeMirror(document.getElementById("codeEditor"), {
+        value: "<!-- Your HTML goes here -->",
+        mode: "htmlmixed",
+        theme: "monokai",
+        lineNumbers: true,
+        tabSize: 2
+      });
+    };
+
+    async function loadHTML() {
+      const url = document.getElementById('url').value;
+      try {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error("Failed to load file.");
+        const html = await response.text();
+        editor.setValue(html);
+      } catch (err) {
+        alert("Error: " + err.message);
+      }
+    }
+
+    function runHTML() {
+      const htmlContent = editor.getValue();
+      const iframe = document.getElementById('runnerFrame');
+      if (iframe.dataset.blobUrl) {
+        URL.revokeObjectURL(iframe.dataset.blobUrl);
+      }
+      const blob = new Blob([htmlContent], { type: 'text/html' });
+      const blobURL = URL.createObjectURL(blob);
+      iframe.dataset.blobUrl = blobURL;
+      iframe.src = blobURL;
+    }
+
+    function focusCanvas() {
+      const iframe = document.getElementById('runnerFrame');
+      if (iframe && iframe.contentWindow) {
+        iframe.contentWindow.focus();
+      }
+    }
+
+    async function saveToGist() {
+      const token = document.getElementById('gistToken').value;
+      if (!token) return alert("GitHub token required.");
+
+      const content = editor.getValue();
+      const filename = prompt("Filename in Gist:", "index.html") || "index.html";
+
+      const response = await fetch("https://api.github.com/gists", {
+        method: "POST",
+        headers: {
+          "Authorization": `token ${token}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          description: "Saved from HTML Runner",
+          public: false,
+          files: {
+            [filename]: { content }
+          }
+        })
+      });
+
+      const data = await response.json();
+      if (data.id) {
+        document.getElementById('gistId').value = data.id;
+        alert("Saved! Gist ID: " + data.id);
+      } else {
+        alert("Failed to save to Gist.");
+      }
+    }
+
+    async function loadFromGist() {
+      const id = document.getElementById('gistId').value;
+      try {
+        const res = await fetch(`https://api.github.com/gists/${id}`);
+        const data = await res.json();
+        const files = Object.values(data.files);
+        if (files.length > 0) {
+          editor.setValue(files[0].content);
+        } else {
+          alert("Gist is empty");
+        }
+      } catch (err) {
+        alert("Error loading gist: " + err);
+      }
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault();
+        focusCanvas();
+      }
+    });
+  </script>
+</body>
+</html>
