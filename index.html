@@ -2,167 +2,650 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>HTML Runner with Gist Sync</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css" />
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/monokai.min.css" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/htmlmixed/htmlmixed.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/javascript/javascript.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/css/css.min.js"></script>
+  <title>Raycist GAME</title>
   <style>
-    body {
-      margin: 0;
-      background: #111;
-      color: white;
-      font-family: monospace;
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-    }
-    #controls {
-      padding: 10px;
-      background: #222;
-    }
-    #controls input,
-    #controls button,
-    #controls select {
-      margin-right: 10px;
-      padding: 6px;
-      font-size: 14px;
-    }
-    #editor {
-      flex: 1;
-      display: flex;
-    }
-    #codeEditor {
-      width: 100%;
-      height: 100%;
-    }
-    iframe {
-      width: 853px;
-      height: 480px;
-      border: 2px solid #ccc;
-      background: white;
-      position: fixed;
-      bottom: 10px;
-      right: 10px;
-      z-index: 10;
-    }
+    body { margin: 0; overflow: hidden; background: black; }
+    canvas { display: block; }
   </style>
 </head>
 <body>
-  <div id="controls">
-    <input id="url" type="text" placeholder="Paste raw GitHub URL..." style="width: 30%;">
-    <input id="gistToken" type="password" placeholder="GitHub Token" style="width: 20%;">
-    <button onclick="loadHTML()">Load URL</button>
-    <button onclick="runHTML()">▶ Run</button>
-    <button onclick="focusCanvas()">🎯 Focus</button>
-    <button onclick="saveToGist()">💾 Save to Gist</button>
-    <button onclick="loadFromGist()">📂 Load from Gist</button>
-    <input id="gistId" placeholder="Gist ID" style="width: 15%;">
-    <span style="margin-left: 10px;">💡 Ctrl+Shift+R to focus canvas</span>
-  </div>
-  <div id="editor">
-    <div id="codeEditor"></div>
-  </div>
-  <iframe id="runnerFrame" sandbox="allow-scripts allow-same-origin"></iframe>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
 
-  <script>
-    let editor;
-    window.onload = () => {
-      editor = CodeMirror(document.getElementById("codeEditor"), {
-        value: "<!-- Your HTML goes here -->",
-        mode: "htmlmixed",
-        theme: "monokai",
-        lineNumbers: true,
-        tabSize: 2
-      });
-    };
 
-    async function loadHTML() {
-      const url = document.getElementById('url').value;
-      try {
-        const response = await fetch(url);
-        if (!response.ok) throw new Error("Failed to load file.");
-        const html = await response.text();
-        editor.setValue(html);
-      } catch (err) {
-        alert("Error: " + err.message);
-      }
-    }
+const tileSize = 64;
+const fov = Math.PI / 3
+let numRays;
+let maxDepth = 3000;
+let mapscale = 800; // default fallback
+const targetAspect = 16 / 9; // this is your baseline
 
-    function runHTML() {
-      const htmlContent = editor.getValue();
-      const iframe = document.getElementById('runnerFrame');
-      if (iframe.dataset.blobUrl) {
-        URL.revokeObjectURL(iframe.dataset.blobUrl);
-      }
-      const blob = new Blob([htmlContent], { type: 'text/html' });
-      const blobURL = URL.createObjectURL(blob);
-      iframe.dataset.blobUrl = blobURL;
-      iframe.src = blobURL;
-    }
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
 
-    function focusCanvas() {
-      const iframe = document.getElementById('runnerFrame');
-      if (iframe && iframe.contentWindow) {
-        iframe.contentWindow.focus();
-      }
-    }
+  numRays = canvas.width ;
 
-    async function saveToGist() {
-      const token = document.getElementById('gistToken').value;
-      if (!token) return alert("GitHub token required.");
+  const currentAspect = canvas.width / canvas.height;
+  const scaleFactor = currentAspect / targetAspect;
 
-      const content = editor.getValue();
-      const filename = prompt("Filename in Gist:", "index.html") || "index.html";
+  // Adjust mapscale so wall height keeps walls square on all screens
+  //mapscale = 800 / scaleFactor;
+  mapscale = 800;
+  console.log("Resolution:", canvas.width, "x", canvas.height);
+  console.log("mapscale:", mapscale);
+}
 
-      const response = await fetch("https://api.github.com/gists", {
-        method: "POST",
-        headers: {
-          "Authorization": `token ${token}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          description: "Saved from HTML Runner",
-          public: false,
-          files: {
-            [filename]: { content }
-          }
-        })
-      });
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas(); // Call it once on load
 
-      const data = await response.json();
-      if (data.id) {
-        document.getElementById('gistId').value = data.id;
-        alert("Saved! Gist ID: " + data.id);
+
+
+
+
+function generateMap(width, height) {
+  const map = [];
+  for (let y = 0; y < height; y++) {
+    let row = '';
+    for (let x = 0; x < width; x++) {
+      if (x === 0 || x === width - 1 || y === 0 || y === height - 1) {
+        row += '2'; // border wall
       } else {
-        alert("Failed to save to Gist.");
+        const r = Math.random();
+        if (r < 0.7) row += '.';     // free space
+        else if (r < 0.9) row += '1'; // wall
+		  else if (r < 0.95) row += '3';
+        else row += '1';             // special breakable block
+      }
+    }
+    map.push(row.split(''));
+  }
+  return map;
+}
+
+const map = generateMap(16,16);
+
+function getCurrentTile() {
+  const mapX = Math.floor(player.x / tileSize);
+  const mapY = Math.floor(player.y / tileSize);
+  const mapPos = map[mapY]?.[mapX];
+  if (mapPos === '3' && player.health < 100) player.health++;
+  
+}
+
+
+//loadMapFromFile("map.txt").then(loadedMap => {
+//  map = loadedMap;
+//  gameLoop(); // Start the game only after the map is loaded
+//}).catch(err => {
+//  console.error("Failed to load map:", err);
+//});
+
+const player = {
+  x: 200,
+  y: 200,
+  angle: 0,
+  velocity: 0,
+  acceleration: 0.1,
+  newturn: 0,
+  maxSpeed: 4,
+  friction: 0.05,
+  turnSpeed: 0.09,
+  turnAcceleration: 0.1,
+  maxHealth: 100,
+  health: 1,
+  jump: 0,
+  ammo: 30,
+  maxammo: 30,
+  re: false,
+  punchRange: 80,
+  punchDamage: 10,
+  cooldown: false,
+  cooldowntime: 0
+};
+
+var i = 0;
+
+const enemies = [
+{ x: 300, y: 300, size: 48,height: 1000,health: 300, maxHealth: 300, isAlive: true, speed: 1.2, attackRange: 30, attackCooldown: 0, attackRate: 60,i: 0 },
+{ x: 500, y: 400, size: 48,height: 500,health: 300, maxHealth: 300, isAlive: true, speed: 1.2, attackRange: 30, attackCooldown: 0, attackRate: 60,i: 1 },
+{ x: 700, y: 600, size: 90,height: 800,health: 1000, maxHealth: 1000, isAlive: true, speed: 1.2,attackRange: 30, attackCooldown: 0, attackRate: 60,i: 2 }
+];
+
+function sleep(ms){
+ Promise(resolve => setTimeout(resolve, ms));
+}
+
+
+const keys = {};
+window.addEventListener('keydown', e => {
+  keys[e.key] = true;
+  if (e.key === ' ') shoot();
+  if (e.key === 'r'){
+  		if (player.re === false) {
+			reload();
+			console.log(player.re);
+		}
+  } 
+  if (e.key === 'p') location.reload();
+  
+  if (e.key === 'g' && player.cooldown === false) punch();
+  if (e.key === 'z'&& getCurrentTile() === '3') player.helth++;
+
+});
+window.addEventListener('keyup', e => keys[e.key] = false);
+
+let weaponSway = 0;
+let swayDirection = 1;
+let showMuzzleFlash = false;
+let muzzleFlashTimer = 0;
+let tracer = null;
+
+
+async function death(){
+	ctx.fillStyle = 'red';
+  	ctx.font = '16px Arial';
+  	ctx.fillText(`YOU DIED`,canvas.width / 2 , canvas.height / 2);
+  	await sleep(5000);
+	location.reload();
+}
+
+
+
+function movePlayer() {
+  
+
+
+  // Turning logic with acceleration
+  if (keys.ArrowLeft) {
+    player.newturn -= player.turnAcceleration;
+  } else if (keys.ArrowRight) {
+    player.newturn += player.turnAcceleration;
+  } else {
+    // Apply friction to smooth stop when no input
+    player.newturn *= (1 - player.friction * 10);
+  }
+
+  // Clamp turn speed
+  player.newturn = Math.max(-player.turnSpeed, Math.min(player.turnSpeed, player.newturn));
+
+  // Apply turn
+  player.angle += player.newturn;
+
+  // Forward/backward movement
+  if (keys.w) {
+    player.velocity += player.acceleration;
+  } else if (keys.s) {
+    player.velocity -= player.acceleration;
+  } else {
+    player.velocity *= 0.9;
+  }
+
+  // Clamp speed
+  player.velocity = Math.max(-player.maxSpeed, Math.min(player.maxSpeed, player.velocity));
+
+  // Strafe movement
+  let strafeX = 0;
+  let strafeY = 0;
+  if (keys.a) {
+    // Strafe left
+    strafeX -= Math.cos(player.angle + Math.PI / 2) * player.maxSpeed * 0.5;
+    strafeY -= Math.sin(player.angle + Math.PI / 2) * player.maxSpeed * 0.5;
+  }
+  if (keys.d) {
+    // Strafe right
+    strafeX += Math.cos(player.angle + Math.PI / 2) * player.maxSpeed * 0.5;
+    strafeY += Math.sin(player.angle + Math.PI / 2) * player.maxSpeed * 0.5;
+  }
+
+  // Calculate movement
+  const dx = Math.cos(player.angle) * player.velocity + strafeX;
+  const dy = Math.sin(player.angle) * player.velocity + strafeY;
+
+  const nextX = player.x + dx;
+  const nextY = player.y + dy;
+  const mapX = Math.floor(nextX / tileSize);
+  const mapY = Math.floor(nextY / tileSize);
+
+
+  // Only move if no wall
+  if (map[mapY]?.[mapX] !== '1' && map[mapY]?.[mapX] !== '2') {
+    player.x = nextX;
+    player.y = nextY;
+  }
+
+  // Weapon sway logic
+  if (Math.abs(player.velocity) > 0.1 || Math.abs(player.newturn) > 0.01 || keys.a || keys.d) {
+    weaponSway += swayDirection * 0.5;
+    if (weaponSway > 5 || weaponSway < -5) swayDirection *= -1;
+  } else {
+    weaponSway *= 0.9;
+  }
+
+  // Check death
+  if (player.health <= 0) {
+    death();
+  }
+  
+
+}
+
+
+function shoot() {
+  if (player.ammo <= 0) {
+		if (player.re === false) reload();
+		return;	
+  }
+  
+  player.ammo--;
+  showMuzzleFlash = true;
+  muzzleFlashTimer = 3;
+	
+  console.log(player.ammo);
+
+  const rayAngle = player.angle;
+  let distance = 0;
+  let hitX, hitY;
+
+  while (distance < maxDepth) {
+    distance += 1;
+    const targetX = player.x + Math.cos(rayAngle) * distance;
+    const targetY = player.y + Math.sin(rayAngle) * distance;
+    const mapX = Math.floor(targetX / tileSize);
+    const mapY = Math.floor(targetY / tileSize);
+
+    if (map[mapY]?.[mapX] === '1') break;
+	 if (map[mapY]?.[mapX] === '2') break;
+    for (const enemy of enemies) {
+  		if (!enemy.isAlive) continue;
+
+  		const dx = enemy.x - targetX;
+  		const dy = enemy.y - targetY;
+  		const dist = Math.sqrt(dx * dx + dy * dy);
+  		if (dist < enemy.size / 2) {
+    		enemy.health -= 25;
+
+			if (enemy.health <= 0) enemy.isAlive = false;
+    			hitX = targetX;
+    			hitY = targetY;
+    		return;
+  		}
+	 }
+    			hitX = targetX;
+    			hitY = targetY;
+  tracer = { x: hitX, y: hitY, time: 3 };
+  }
+}
+
+async function reload(){
+	player.re = true;
+	console.log(player.re);
+	await sleep(5000);
+	player.ammo = 30;
+}
+
+
+function punch() {
+  const rayAngle = player.angle;
+  let distance = 0;
+  let hitX, hitY;
+
+  while (distance < player.punchRange) {
+    distance += 1;
+    const targetX = player.x + Math.cos(rayAngle) * distance;
+    const targetY = player.y + Math.sin(rayAngle) * distance;
+    const mapX = Math.floor(targetX / tileSize);
+    const mapY = Math.floor(targetY / tileSize);
+
+//	 distance = Math.max(player.punchRange,distance);
+
+    if (map[mapY] && map[mapY][mapX] === '1') {map[mapY][mapX] = '.';break;}
+    //if (map[mapY] && map[mapY][mapX] === '2') map[mapY][mapX] = '.';
+    for (const enemy of enemies) {
+  		if (!enemy.isAlive) continue;
+
+  		const dx = enemy.x - targetX;
+  		const dy = enemy.y - targetY;
+  		const dist = Math.sqrt(dx * dx + dy * dy);
+  		if (dist < enemy.size / 2) {
+    		enemy.health -= 25;
+
+			if (enemy.health <= 0) enemy.isAlive = false;
+    			hitX = targetX;
+    			hitY = targetY;
+    		return;
+  		}
+	 }
+    			hitX = targetX;
+    			hitY = targetY;
+  }
+  
+  if (hitX && hitY) {
+    print("du");
+  }
+  cooldown();
+  
+}
+
+async function cooldown(){
+    player.cooldown = true;
+    
+    player.cooldowntime = 2000;
+    while (player.cooldowntime>0) {
+		player.cooldowntime--;
+			
+    } 
+    player.cooldown = false;
+}
+
+function moveEnemies() {
+  for (const enemy of enemies) {
+    if (!enemy.isAlive) continue;
+
+    const dx = player.x - enemy.x;
+    const dy = player.y - enemy.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist > enemy.attackRange) {
+      const angle = Math.atan2(dy, dx);
+      const ex = Math.cos(angle) * enemy.speed;
+      const ey = Math.sin(angle) * enemy.speed;
+
+      const nextX = enemy.x + ex;
+      const nextY = enemy.y + ey;
+      const mapX = Math.floor(nextX / tileSize);
+      const mapY = Math.floor(nextY / tileSize);
+
+      if (map[mapY]?.[mapX] !== '1') {
+        enemy.x = nextX;
+        enemy.y = nextY;
+      }
+    } else {
+      if (enemy.attackCooldown <= 0) {
+        player.health -= 10;
+        enemy.attackCooldown = enemy.attackRate;
       }
     }
 
-    async function loadFromGist() {
-      const id = document.getElementById('gistId').value;
-      try {
-        const res = await fetch(`https://api.github.com/gists/${id}`);
-        const data = await res.json();
-        const files = Object.values(data.files);
-        if (files.length > 0) {
-          editor.setValue(files[0].content);
-        } else {
-          alert("Gist is empty");
-        }
-      } catch (err) {
-        alert("Error loading gist: " + err);
+    if (enemy.attackCooldown > 0) enemy.attackCooldown--;
+  }
+}
+
+
+
+
+function castRays() {
+  for (let i = 0; i < numRays; i++) {
+    const rayAngle = player.angle - fov / 2 + (i / numRays) * fov;
+    let distance = 0;
+    while (distance < maxDepth) {
+      distance += 1;
+      const targetX = player.x + Math.cos(rayAngle) * distance;
+      const targetY = player.y + Math.sin(rayAngle) * distance;
+      const mapX = Math.floor(targetX / tileSize);
+      const mapY = Math.floor(targetY / tileSize);
+
+      if (map[mapY]?.[mapX] === '1') {
+        	const corrected = distance * Math.cos(rayAngle - player.angle);
+        	const wallHeight = (tileSize * mapscale) / corrected;
+        	const shade = 255 - Math.min(255, corrected);
+        	ctx.fillStyle = `rgb(${shade},${shade},${shade})`;
+        	ctx.fillRect(i, (canvas.height - wallHeight) / 2, 1, wallHeight);
+			break;
+      }
+		if (map[mapY]?.[mapX] === '2'){
+			const corrected = distance * Math.cos(rayAngle - player.angle);
+        	const wallHeight = (tileSize * mapscale) / corrected;
+        	const shade = 255 - Math.min(255, corrected);
+        	ctx.fillStyle = `rgb(${shade},${shade},255)`;
+        	ctx.fillRect(i, (canvas.height - wallHeight) / 2, 1, wallHeight);
+      	break;  
+		}
+		if (map[mapY]?.[mapX] === '3'){
+			const corrected = distance * Math.cos(rayAngle - player.angle);
+        	const wallHeight = (tileSize * mapscale) / corrected;
+        	const shade = 255 - Math.min(255, corrected);
+        	ctx.fillStyle = `rgb(${shade},255,${shade})`;
+        	ctx.fillRect(i, (canvas.height - wallHeight) / 2, 1, wallHeight);
+      	break;  
+		}
+		
+      
+    }
+  }
+}
+
+
+function drawEnemies() {
+  for (const enemy of enemies) {
+    if (!enemy.isAlive) continue;
+
+    const dx = enemy.x - player.x;
+    const dy = enemy.y - player.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    const angleToEnemy = Math.atan2(dy, dx);
+    let relativeAngle = angleToEnemy - player.angle;
+
+    // Normalize angle
+    while (relativeAngle < -Math.PI) relativeAngle += Math.PI * 2;
+    while (relativeAngle > Math.PI) relativeAngle -= Math.PI * 2;
+
+    const inFOV = Math.abs(relativeAngle) < fov / 2;
+    if (!inFOV) continue;
+
+
+
+    // 🔍 Line of sight check using simple raycast
+    let blocked = false;
+    const steps = Math.floor(dist);
+    for (let i = 0; i < steps; i++) {
+      const checkX = player.x + Math.cos(angleToEnemy) * i;
+      const checkY = player.y + Math.sin(angleToEnemy) * i;
+      const mapX = Math.floor(checkX / tileSize);
+      const mapY = Math.floor(checkY / tileSize);
+      if (map[mapY]?.[mapX] === '1') {
+        blocked = true;
+        break;
+      }
+		if (map[mapY]?.[mapX] === '2' ) {
+			blocked = true;
+			break;
+		}
+		if (map[mapY]?.[mapX] === '3' ) {
+			blocked = true;
+			break;
+		}
+    }
+    if (blocked) continue;
+
+
+    // Draw enemy if not blocked
+    const screenX = (0.5 + relativeAngle / fov) * canvas.width;
+    const height = (tileSize * enemy.height) / dist;
+    const y = (canvas.height - height) / 2;
+    const size = height*(enemy.size / tileSize);
+
+    // Enemy sprite (simple red square)
+    ctx.fillStyle = 'red';
+    ctx.fillRect(screenX - size / 2, y + height / 2 - size / 2, size, size);
+
+    // Health bar above enemy
+    const healthRatio = enemy.health / enemy.maxHealth;
+    const barWidth = size;
+    const barHeight = 6;
+    const barX = screenX - barWidth / 2;
+    const barY = y + height / 2 - size / 2 - 10;
+
+    ctx.fillStyle = 'black';
+    ctx.fillRect(barX, barY, barWidth, barHeight);
+    ctx.fillStyle = healthRatio > 0.5 ? 'lime' : healthRatio > 0.25 ? 'orange' : 'red';
+    ctx.fillRect(barX, barY, barWidth * healthRatio, barHeight);
+    ctx.strokeStyle = 'white';
+    ctx.strokeRect(barX, barY, barWidth, barHeight);
+  }
+}
+
+
+function drawTracer() {
+  if (!tracer || tracer.time <= 0) return;
+
+  const dx = tracer.x - player.x;
+  const dy = tracer.y - player.y;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+  const angleToTracer = Math.atan2(dy, dx);
+  let relativeAngle = angleToTracer - player.angle;
+
+  while (relativeAngle < -Math.PI) relativeAngle += Math.PI * 2;
+  while (relativeAngle > Math.PI) relativeAngle -= Math.PI * 2;
+
+  const inFOV = Math.abs(relativeAngle) < fov / 2;
+  if (!inFOV) return;
+
+  const screenX = (0.5 + relativeAngle / fov) * canvas.width;
+  const height = (tileSize * 400) / distance;
+  const y = (canvas.height - height) / 2;
+
+  ctx.strokeStyle = 'yellow';
+  ctx.beginPath();
+  ctx.moveTo(canvas.width / 2, canvas.height - 80);
+  ctx.lineTo(screenX, y + height / 2);
+  ctx.stroke();
+
+  tracer.time--;
+}
+
+function drawMinimap() {
+  
+  const mapWidth = map[0].length;
+  const mapHeight = map.length;
+  const scale = mapHeight / (mapHeight**2);
+  const miniTile = tileSize * scale;
+  
+  for (let y = 0; y < mapHeight; y++) {
+    for (let x = 0; x < mapWidth; x++) {
+      if (map[y][x] === '1') {
+        ctx.fillStyle = '#444';
+        ctx.fillRect(x * miniTile, y * miniTile, miniTile, miniTile);
+      }
+		if (map[y][x] === '2') {
+        ctx.fillStyle = '#0000CC';
+        ctx.fillRect(x * miniTile, y * miniTile, miniTile, miniTile);
+      }
+		if (map[y][x] === '3') {
+        ctx.fillStyle = '#00CC00';
+        ctx.fillRect(x * miniTile, y * miniTile, miniTile, miniTile);
       }
     }
+  }
 
-    document.addEventListener('keydown', (e) => {
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'r') {
-        e.preventDefault();
-        focusCanvas();
-      }
-    });
-  </script>
+  ctx.fillStyle = 'red';
+  for (const enemy of enemies) {
+  		if (enemy.isAlive) {
+    		ctx.fillRect(enemy.x * scale - 4, enemy.y * scale - 4, 8, 8);
+  		}
+  }
+
+
+  ctx.fillStyle = '#FF00FF';
+  ctx.beginPath();
+  ctx.arc(player.x * scale, player.y * scale, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = 'cyan';
+  ctx.beginPath();
+  ctx.moveTo(player.x * scale, player.y * scale);
+  ctx.lineTo(
+    player.x * scale + Math.cos(player.angle) * 10,
+    player.y * scale + Math.sin(player.angle) * 10
+  );
+  ctx.stroke();
+}
+
+
+
+function gameLoop() {
+  movePlayer();
+  
+  moveEnemies();
+
+  getCurrentTile();
+
+  ctx.fillStyle = 'red';
+  ctx.font = '16px Arial';
+  ctx.fillText(`YOU DIED`,canvas.width / 2 , canvas.height / 2);
+
+
+  for (const enemy of enemies) {
+  		//console.log('Health:', enemy.health ,'index: ', enemy.i);
+		
+  }
+
+
+  if (player.ammo === player.maxammo) player.re = false;
+  
+
+  
+
+  ctx.fillStyle = '#87ceeb';
+  ctx.fillRect(0, 0, canvas.width, canvas.height / 2);
+
+  ctx.fillStyle = '#eeeeee';
+  ctx.fillRect(0, canvas.height / 2, canvas.width, canvas.height / 2);
+
+  castRays();
+  drawTracer();
+  drawEnemies();
+
+  if (showMuzzleFlash) {
+    ctx.fillStyle = 'yellow';
+    ctx.fillRect(canvas.width / 2 - 5, canvas.height - 30, 10, 10);
+    muzzleFlashTimer--;
+    if (muzzleFlashTimer <= 0) showMuzzleFlash = false;
+  }
+
+  drawMinimap();
+
+  // HUD
+  const barWidth = 150, barHeight = 20, margin = 20;
+  const x = canvas.width - barWidth - margin;
+  const y = canvas.height - barHeight - margin;
+  const healthRatio = player.health / player.maxHealth;
+
+
+  ctx.fillStyle = 'white';
+  ctx.font = '16px Arial';
+  ctx.fillText('Cooldown: ' + player.cooldowntime, x, y + 30);  
+  
+  ctx.fillStyle = 'white';
+  ctx.font = '16px Arial';
+  ctx.fillText(`Ammo: ${player.ammo}/${player.maxammo}`, x, y - 30);
+
+  ctx.fillStyle = 'black';
+  ctx.fillRect(x, y, barWidth, barHeight);
+  ctx.fillStyle = healthRatio > 0.5 ? 'lime' : healthRatio > 0.25 ? 'orange' : 'red';
+  ctx.fillRect(x, y, barWidth * healthRatio, barHeight);
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, barWidth, barHeight);
+  
+  //CROSSAIR
+
+  // Weapon
+  const weaponWidth = 80;
+  const weaponHeight = 100;
+  const baseX = canvas.width / 2 - weaponWidth / 2;
+  const baseY = canvas.height - weaponHeight + 45;
+  ctx.fillStyle = 'gray';
+  ctx.fillRect(baseX + weaponSway, baseY, weaponWidth, weaponHeight);
+
+  
+
+  requestAnimationFrame(gameLoop);
+}
+
+gameLoop();
+</script>
 </body>
 </html>
